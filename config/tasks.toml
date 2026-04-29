@@ -1,0 +1,99 @@
+# TaskForge — configuration exemple
+# Serveur ENSPD — tâches planifiées
+
+# Format :
+# [[task]]
+# id = "unique"
+# name = "libellé"
+# command = "shell"
+# schedule = "cron ou macro"
+# timeout_seconds = 60
+# max_retries = 0
+# enabled = true
+
+# Macros :
+# @hourly @daily @midnight @weekly @monthly @yearly @annually
+# @every 5m | 2h | 30s
+
+# Cron (5 champs)
+# minute hour day month weekday (0=dim ... 7=dim)
+
+# Sauvegarde base de données académique (01:00 quotidien)
+[[task]]
+id              = "backup-bdd"
+name            = "Sauvegarde BDD académique"
+command         = "pg_dump enspd_academic > /backup/db_$(date +%Y%m%d).sql"
+schedule        = "0 1 * * *"
+timeout_seconds = 300
+max_retries     = 2
+enabled         = true
+
+# Nettoyage fichiers temporaires (quotidien minuit)
+[[task]]
+id              = "cleanup-tmp"
+name            = "Nettoyage /tmp"
+command         = "find /tmp -type f -mtime +1 -delete"
+schedule        = "@daily"
+timeout_seconds = 60
+max_retries     = 0
+enabled         = true
+
+# Rapport charge système (toutes les 15 min)
+[[task]]
+id              = "rapport-charge"
+name            = "Rapport charge système"
+command         = "top -bn1 | head -20 >> /var/log/taskforge/charge.log"
+schedule        = "*/15 * * * *"
+timeout_seconds = 10
+max_retries     = 0
+enabled         = true
+
+# Envoi bulletins étudiants (1er du mois 08:00)
+[[task]]
+id              = "bulletins-mensuels"
+name            = "Envoi bulletins étudiants"
+command         = "/opt/enspd/scripts/send_bulletins.sh"
+schedule        = "0 8 1 * *"
+timeout_seconds = 600
+max_retries     = 3
+enabled         = true
+
+# Archivage logs hebdomadaire (dimanche 23:00)
+[[task]]
+id              = "archivage-logs"
+name            = "Archivage logs hebdomadaire"
+command         = "tar -czf /archive/logs_$(date +%Y%W).tar.gz /var/log/app/ && truncate -s 0 /var/log/app/*.log"
+schedule        = "0 23 * * 0"
+timeout_seconds = 120
+max_retries     = 1
+enabled         = true
+
+# Vérification services (toutes les 5 min)
+[[task]]
+id              = "uptime-check"
+name            = "Vérification uptime services"
+command         = "/opt/enspd/scripts/check_services.sh || curl -s -X POST $ALERT_WEBHOOK -d 'service down'"
+schedule        = "@every 5m"
+timeout_seconds = 30
+max_retries     = 0
+enabled         = true
+
+# Nettoyage sessions Redis (toutes les heures)
+[[task]]
+id              = "clean-sessions"
+name            = "Nettoyage sessions expirées"
+command         = "redis-cli --scan --pattern 'session:*' | xargs redis-cli del"
+schedule        = "@hourly"
+timeout_seconds = 30
+max_retries     = 0
+enabled         = true
+
+# Rapport santé hebdomadaire (désactivé)
+[[task]]
+id              = "rapport-hebdo"
+name            = "Rapport santé hebdomadaire"
+command         = "/opt/enspd/scripts/weekly_health_report.sh | mail -s 'TaskForge Weekly' admin@enspd.cm"
+schedule        = "@weekly"
+timeout_seconds = 120
+max_retries     = 1
+enabled         = false

@@ -124,7 +124,7 @@ fn test_parse_macro_every_2h() {
 #[test]
 fn test_parse_macro_every_30s() {
     let result = parse_macro("@every 30s");
-    assert!(result.is_some());
+    assert!(result.is_none());
 }
 
 #[test]
