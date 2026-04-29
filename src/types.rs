@@ -1,37 +1,35 @@
 use chrono::{DateTime, Utc};
 use std::fmt;
 
-/// Représente une planification d'exécution
+// Types de données pour les tâches et les horaires
 #[derive(Debug, Clone, PartialEq)]
 pub enum Schedule {
-    /// Expression cron avec 5 champs
-    Cron {
+    Cron { // Expression cron à 5 champs
         minute: CronField,
         hour: CronField,
         day_of_month: CronField,
         month: CronField,
         day_of_week: CronField,
     },
-    /// Macros prédéfinies
     Daily,
     Hourly,
     Weekly,
     Monthly,
     Yearly,
-    EveryMinutes(u32),
+    EveryMinutes(u32), // Intervalle en minutes
 }
 
-/// Un champ d'expression cron (peut être une valeur, liste, plage, ou étoile)
+// Types de champs pour les expressions cron
 #[derive(Debug, Clone, PartialEq)]
 pub enum CronField {
-    Any,                           // *
-    Single(u32),                   // 5
-    List(Vec<u32>),               // 1,3,5
-    Range(u32, u32),              // 1-5
-    Step(u32, u32),               // */15 ou 1-10/2
+    Any,             // *
+    Single(u32),     // valeur unique
+    List(Vec<u32>),  // liste de valeurs
+    Range(u32, u32), // intervalle
+    Step(u32, u32),  // base/step
 }
 
-/// Définit une tâche planifiée
+// Types de données pour les tâches et les exécutions
 #[derive(Debug, Clone)]
 pub struct Task {
     pub id: String,
@@ -40,21 +38,22 @@ pub struct Task {
     pub schedule: Schedule,
     pub timeout_seconds: u32,
     pub max_retries: u32,
-    pub enabled: bool,
+    pub enabled: bool, // activation de la tâche
 }
 
-/// Enregistrement d'une exécution 
+// Enregistrement d'exécution pour l'historique
 #[derive(Debug, Clone)]
 pub struct ExecutionRecord {
     pub task_id: String,
     pub start_time: DateTime<Utc>,
-    pub end_time: Option<DateTime<Utc>>,
-    pub exit_code: Option<i32>,
+    pub end_time: Option<DateTime<Utc>>, // None si en cours
+    pub exit_code: Option<i32>,          // None si non terminé
     pub stdout: String,
     pub stderr: String,
     pub success: bool,
 }
 
+// Affichage pour debug et logs
 impl fmt::Display for CronField {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -65,11 +64,18 @@ impl fmt::Display for CronField {
                 write!(f, "{}", s.join(","))
             }
             CronField::Range(start, end) => write!(f, "{}-{}", start, end),
-            CronField::Step(_base, step) => write!(f, "*/{}", step),
+            CronField::Step(base, step) => {
+                if *base == 0 {
+                    write!(f, "*/{}", step) // wildcard avec pas
+                } else {
+                    write!(f, "{}/{}", base, step) // base explicite
+                }
+            }
         }
     }
 }
 
+// Affichage de l'horaire pour debug et logs
 impl fmt::Display for Schedule {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -80,8 +86,7 @@ impl fmt::Display for Schedule {
             Schedule::Yearly => write!(f, "@yearly"),
             Schedule::EveryMinutes(n) => write!(f, "@every {}m", n),
             Schedule::Cron { minute, hour, day_of_month, month, day_of_week } => {
-                write!(f, "{} {} {} {} {}", 
-                    minute, hour, day_of_month, month, day_of_week)
+                write!(f, "{} {} {} {} {}", minute, hour, day_of_month, month, day_of_week) // format cron standard
             }
         }
     }

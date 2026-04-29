@@ -1,9 +1,9 @@
 use crate::types::Schedule;
 
-/// Parse les macros comme @daily, @hourly, @every 5m, etc et les convertit en Schedule
+// Parser pour les macros de planification
 pub fn parse_macro(input: &str) -> Option<Schedule> {
     if !input.starts_with('@') {
-        return None;
+        return None; // ignore si pas une macro
     }
 
     let macro_str = &input[1..];
@@ -20,7 +20,7 @@ pub fn parse_macro(input: &str) -> Option<Schedule> {
                 if parts.len() == 1 {
                     let value_str = parts[0];
                     if let Some(minutes) = parse_every_value(value_str) {
-                        return Some(Schedule::EveryMinutes(minutes));
+                        return Some(Schedule::EveryMinutes(minutes)); // intervalle valide
                     }
                 }
             }
@@ -29,14 +29,20 @@ pub fn parse_macro(input: &str) -> Option<Schedule> {
     }
 }
 
+// Parse la valeur de l'intervalle pour @every (ex: "5m", "2h", "30s")
 fn parse_every_value(input: &str) -> Option<u32> {
     if input.ends_with('m') {
-        input[..input.len()-1].parse().ok()
+        input[..input.len() - 1].parse().ok() // minutes
     } else if input.ends_with('h') {
-        input[..input.len()-1].parse::<u32>().ok().map(|h| h * 60)
+        input[..input.len() - 1].parse::<u32>().ok().map(|h| h * 60) // heures vers minutes
     } else if input.ends_with('s') {
-        input[..input.len()-1].parse::<u32>().ok().map(|s| s / 60)
+        let secs: u32 = input[..input.len() - 1].parse().ok()?;
+        if secs < 60 {
+            None // sous-minute non supporté
+        } else {
+            Some(secs / 60) // secondes vers minutes
+        }
     } else {
-        input.parse().ok()
+        input.parse().ok() // valeur brute en minutes
     }
 }
