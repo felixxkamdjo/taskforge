@@ -2,7 +2,8 @@ use std::collections::HashMap;
 use chrono::{DateTime, Utc};
 
 use crate::parser::next_occurrence;
-use crate::types::{Schedule, Task};
+// use crate::types::{Schedule};
+use crate::types::{Task};
 
 // registre de tâches en mémoire, avec des méthodes pour gérer les tâches et calculer les tâches à exécuter
 #[derive(Debug)]
