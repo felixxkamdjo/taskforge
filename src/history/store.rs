@@ -6,12 +6,6 @@ use tokio::sync::mpsc;
 
 use crate::types::ExecutionRecord;
 
-fn log_path(record: &ExecutionRecord) -> PathBuf {
-    // On utilise start_time pour déterminer le mois de l'exécution
-    let month = record.start_time.format("%Y-%m").to_string();
-    PathBuf::from("logs").join(format!("{}_{}.log", record.task_id, month))
-}
-
 fn to_csv_line(record: &ExecutionRecord) -> String {
     // Formatage de end_time (peut être None si tâche interrompue)
     let end_time_str = match record.end_time {
@@ -46,12 +40,29 @@ fn to_csv_line(record: &ExecutionRecord) -> String {
     )
 }
 
+/// Retourne le répertoire de base pour les logs.
+/// Priorité : variable d'env TASKFORGE_LOGS_DIR > current_dir.
+fn logs_base_dir() -> PathBuf {
+    if let Ok(val) = std::env::var("TASKFORGE_LOGS_DIR") {
+        PathBuf::from(val)
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+}
+
 pub fn save_record(record: &ExecutionRecord) -> std::io::Result<()> {
+    let base = logs_base_dir();
+    save_record_in(record, &base)
+}
+
+pub fn save_record_in(record: &ExecutionRecord, base_dir: &PathBuf) -> std::io::Result<()> {
     // 1. S'assurer que le dossier logs/ existe
-    fs::create_dir_all("logs")?;
+    let logs_dir = base_dir.join("logs");
+    fs::create_dir_all(&logs_dir)?;
 
     // 2. Déterminer le fichier cible (rotation mensuelle automatique)
-    let path = log_path(record);
+    let month = record.start_time.format("%Y-%m").to_string();
+    let path = logs_dir.join(format!("{}_{}.log", record.task_id, month));
 
     let mut file = OpenOptions::new().create(true).append(true).open(&path)?;
 
@@ -62,6 +73,14 @@ pub fn save_record(record: &ExecutionRecord) -> std::io::Result<()> {
 }
 
 pub fn start_history_writer(mut rx: mpsc::Receiver<ExecutionRecord>) {
+    // On capture le répertoire courant ICI, dans le thread appelant,
+    // avant le spawn. Le writer tokio tournant dans un thread séparé,
+    // tout appel ultérieur à set_current_dir() (ex: dans les tests) ne
+    // l'affecterait pas — mais il résoudrait "logs/" depuis le mauvais
+    // endroit. En passant la base absolue capturée maintenant, save_record
+    // écrit toujours au bon endroit quel que soit le thread.
+    let base_dir = logs_base_dir();
+
     tokio::spawn(async move {
         while let Some(record) = rx.recv().await {
             let task_id = record.task_id.clone();
@@ -71,7 +90,7 @@ pub fn start_history_writer(mut rx: mpsc::Receiver<ExecutionRecord>) {
                 "✗ échec"
             };
 
-            match save_record(&record) {
+            match save_record_in(&record, &base_dir) {
                 Ok(_) => {
                     println!("[history] Enregistré : {} — {}", task_id, status);
                 }
@@ -135,10 +154,20 @@ mod tests {
     #[test]
     fn test_log_path_format_mensuel() {
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        let record = make_record("backup_db", true, Some(0));
-        let path = log_path(&record);
-        let name = path.file_name().unwrap().to_str().unwrap();
+        let dir = tempdir().unwrap();
+        let _guard = enter_dir(&dir);
 
+        let record = make_record("backup_db", true, Some(0));
+        save_record(&record).unwrap();
+
+        // Le fichier créé doit suivre le format backup_db_YYYY-MM.log
+        let logs: Vec<_> = fs::read_dir(dir.path().join("logs"))
+            .unwrap()
+            .filter_map(|e| e.ok())
+            .collect();
+        assert_eq!(logs.len(), 1);
+        let name = logs[0].file_name();
+        let name = name.to_str().unwrap();
         assert!(name.starts_with("backup_db_"), "Nom incorrect : {}", name);
         assert!(name.ends_with(".log"), "Extension incorrecte : {}", name);
         assert!(name.contains("202"), "Année manquante dans : {}", name);

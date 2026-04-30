@@ -1,6 +1,18 @@
 use std::collections::HashSet;
 use std::fs;
-use std::path::Path;
+use std::path::PathBuf;
+
+/// Retourne le répertoire de base pour les logs.
+/// Priorité : variable d'env TASKFORGE_LOGS_DIR > current_dir.
+/// Miroir exact de store::logs_base_dir() — les deux modules doivent
+/// toujours lire et écrire au même endroit.
+fn logs_base_dir() -> PathBuf {
+    if let Ok(val) = std::env::var("TASKFORGE_LOGS_DIR") {
+        PathBuf::from(val)
+    } else {
+        std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
+    }
+}
 
 #[derive(Debug, Clone)]
 pub struct LogEntry {
@@ -38,7 +50,7 @@ fn parse_line(task_id: &str, line: &str) -> Option<LogEntry> {
 }
 
 fn read_all_entries(task_id: &str) -> Vec<LogEntry> {
-    let logs_dir = Path::new("logs");
+    let logs_dir = logs_base_dir().join("logs");
 
     if !logs_dir.exists() {
         return vec![];
@@ -111,7 +123,7 @@ pub fn success_rate(task_id: &str, last_n: usize) -> f64 {
 }
 
 pub fn list_known_tasks() -> Vec<String> {
-    let logs_dir = Path::new("logs");
+    let logs_dir = logs_base_dir().join("logs");
 
     if !logs_dir.exists() {
         return vec![];
@@ -344,9 +356,6 @@ mod tests {
         // rsplitn(3, '_') ne reconstitue pas correctement un task_id
         // contenant des underscores (ex: "backup_db" → parsé comme "backup").
         // Ce test ÉCHOUERA tant que list_known_tasks() ne sera pas corrigé
-        // pour utiliser une stratégie de split différente (ex: séparer sur
-        // le dernier "_YYYY-MM" plutôt que sur les underscores bruts).
-        // Il est laissé ici pour documenter le problème à corriger en P5.
         let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
         let _guard = enter_dir(&dir);

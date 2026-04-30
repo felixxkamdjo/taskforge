@@ -1,10 +1,3 @@
-/// Tests d'intégration du module history (P4).
-///
-/// Ces tests vérifient le comportement de store + query depuis l'extérieur
-/// de la crate, comme le ferait P5 en interrogeant l'historique.
-///
-/// IMPORTANT : tous les tests utilisent TEST_LOCK pour éviter les collisions
-/// sur set_current_dir() qui est global au processus.
 use taskforge::history::{last_execution, success_rate, list_known_tasks, total_executions};
 use taskforge::history::store::save_record;
 use taskforge::types::ExecutionRecord;
@@ -32,6 +25,7 @@ fn make_record_at(task_id: &str, success: bool, rfc3339: &str) -> ExecutionRecor
     let start = chrono::DateTime::parse_from_rfc3339(rfc3339)
         .unwrap()
         .with_timezone(&Utc);
+
     ExecutionRecord {
         task_id: task_id.to_string(),
         start_time: start,
@@ -44,7 +38,7 @@ fn make_record_at(task_id: &str, success: bool, rfc3339: &str) -> ExecutionRecor
 }
 
 // ---------------------------------------------------------------------------
-// Tests save_record → last_execution (flux store → query)
+// Persistance et récupération de la dernière exécution
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -67,14 +61,12 @@ fn test_last_execution_returns_most_recent() {
     let dir = tempdir().unwrap();
     env::set_current_dir(&dir).unwrap();
 
-    // Avril puis mars (tri alphabétique = tri chronologique)
     save_record(&make_record_at("chrono", true,  "2026-03-10T01:00:00Z")).unwrap();
     save_record(&make_record_at("chrono", false, "2026-04-20T01:00:00Z")).unwrap();
 
     let last = last_execution("chrono").unwrap();
-    // Le plus récent (avril) doit être retourné en dernier
     assert_eq!(last.status, "failure",
-        "Devrait retourner l'entrée la plus récente (failure d'avril)");
+        "Doit correspondre à l’entrée la plus récente");
 }
 
 #[test]
@@ -87,7 +79,7 @@ fn test_last_execution_unknown_task_returns_none() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests save_record → success_rate
+// Persistance et calcul du taux de succès
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -96,13 +88,12 @@ fn test_success_rate_after_saves() {
     let dir = tempdir().unwrap();
     env::set_current_dir(&dir).unwrap();
 
-    // 3 succès + 1 échec = 75%
     for _ in 0..3 {
         save_record(&make_record("rate_task", true, Some(0))).unwrap();
     }
     save_record(&make_record("rate_task", false, Some(1))).unwrap();
 
-    let rate = success_rate("rate_task", 0); // 0 = toutes les entrées
+    let rate = success_rate("rate_task", 0);
     assert!(
         (rate - 0.75).abs() < 0.001,
         "Taux attendu 0.75, obtenu {}", rate
@@ -115,7 +106,6 @@ fn test_success_rate_sliding_window() {
     let dir = tempdir().unwrap();
     env::set_current_dir(&dir).unwrap();
 
-    // 5 succès anciens, 2 échecs récents
     for _ in 0..5 {
         save_record(&make_record("win_task", true, Some(0))).unwrap();
     }
@@ -123,11 +113,10 @@ fn test_success_rate_sliding_window() {
         save_record(&make_record("win_task", false, Some(1))).unwrap();
     }
 
-    // Sur les 2 dernières : 0 succès → 0%
     let rate = success_rate("win_task", 2);
     assert!(
         rate.abs() < 0.001,
-        "Fenêtre 2 dernières : taux attendu 0.0, obtenu {}", rate
+        "Fenêtre récente : taux attendu 0.0, obtenu {}", rate
     );
 }
 
@@ -141,7 +130,7 @@ fn test_success_rate_no_history_returns_zero() {
 }
 
 // ---------------------------------------------------------------------------
-// Tests rotation mensuelle → list_known_tasks + total_executions
+// Rotation mensuelle et agrégation
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -153,13 +142,13 @@ fn test_monthly_rotation_creates_separate_files() {
     save_record(&make_record_at("backup", true, "2026-03-15T01:00:00Z")).unwrap();
     save_record(&make_record_at("backup", true, "2026-04-15T01:00:00Z")).unwrap();
 
-    // Deux mois → deux fichiers distincts
     let files: Vec<_> = std::fs::read_dir(dir.path().join("logs"))
         .unwrap()
         .filter_map(|e| e.ok())
         .collect();
+
     assert_eq!(files.len(), 2,
-        "Rotation mensuelle : attendu 2 fichiers, trouvé {}", files.len());
+        "Deux mois distincts doivent produire deux fichiers");
 }
 
 #[test]
@@ -170,11 +159,10 @@ fn test_list_known_tasks_after_saves() {
 
     save_record(&make_record("backup_db",   true,  Some(0))).unwrap();
     save_record(&make_record("cleanup_tmp", false, Some(1))).unwrap();
-    save_record(&make_record("backup_db",   true,  Some(0))).unwrap(); // doublon
+    save_record(&make_record("backup_db",   true,  Some(0))).unwrap();
 
     let tasks = list_known_tasks();
-    assert_eq!(tasks.len(), 2,
-        "Attendu 2 tâches distinctes, trouvé : {:?}", tasks);
+    assert_eq!(tasks.len(), 2);
     assert!(tasks.contains(&"backup_db".to_string()));
     assert!(tasks.contains(&"cleanup_tmp".to_string()));
 }
@@ -198,7 +186,6 @@ fn test_total_executions_across_months() {
     let dir = tempdir().unwrap();
     env::set_current_dir(&dir).unwrap();
 
-    // 3 exécutions en mars, 4 en avril → total 7
     for i in 0..3 {
         save_record(&make_record_at(
             "multi_month", true,
@@ -213,11 +200,11 @@ fn test_total_executions_across_months() {
     }
 
     assert_eq!(total_executions("multi_month"), 7,
-        "Total sur 2 mois devrait être 7");
+        "Le total doit agréger tous les mois");
 }
 
 // ---------------------------------------------------------------------------
-// Test du flux complet P3 → P4 via mpsc
+// Pipeline asynchrone via canal mpsc
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -232,7 +219,6 @@ async fn test_history_writer_receives_and_saves() {
     let (tx, rx) = mpsc::channel(32);
     start_history_writer(rx);
 
-    // Envoie 3 records comme le ferait P3
     let records = vec![
         make_record("writer_task", true,  Some(0)),
         make_record("writer_task", false, Some(1)),
@@ -242,13 +228,11 @@ async fn test_history_writer_receives_and_saves() {
     for r in records {
         tx.send(r).await.unwrap();
     }
-    drop(tx); // ferme le canal
+    drop(tx);
 
-    // Petite pause pour laisser le writer tokio traiter les messages
     tokio::time::sleep(tokio::time::Duration::from_millis(200)).await;
 
-    assert_eq!(total_executions("writer_task"), 3,
-        "Le writer doit avoir persisté les 3 records");
+    assert_eq!(total_executions("writer_task"), 3);
 
     let rate = success_rate("writer_task", 0);
     assert!(

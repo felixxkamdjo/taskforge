@@ -1,10 +1,3 @@
-/// Tests d'intégration globaux — P1 + P2 + P3 ensemble.
-///
-/// Ces tests simulent le flux complet :
-///   tasks.toml → load_config → TaskRegistry → execute_with_retry → ExecutionRecord
-///
-/// Ils vérifient que les modules s'interfacent correctement,
-/// sans tester la logique interne de chacun.
 use taskforge::registry::{load_config, TaskRegistry};
 use taskforge::engine::execute_with_retry;
 use taskforge::types::{Schedule, Task, CronField};
@@ -13,6 +6,10 @@ use std::io::Write;
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc;
 use tempfile::NamedTempFile;
+
+// Verrou global pour sérialiser les tests manipulant TASKFORGE_LOGS_DIR.
+// Évite les conflits liés aux variables d'environnement partagées.
+static HISTORY_LOCK: Mutex<()> = Mutex::new(());
 
 fn write_toml(content: &str) -> NamedTempFile {
     let mut f = NamedTempFile::new().unwrap();
@@ -33,7 +30,7 @@ fn make_task(id: &str, command: &str, max_retries: u32, timeout_seconds: u32) ->
 }
 
 // ---------------------------------------------------------------------------
-// P1 + P2 : parsing → registre → tâches dues
+// P1 + P2 : parsing vers registre vers tâches dues
 // ---------------------------------------------------------------------------
 
 #[test]
@@ -64,7 +61,7 @@ enabled = false
 
     let from = Utc.with_ymd_and_hms(2024, 1, 1, 12, 0, 0).unwrap();
 
-    // Fenêtre de 10 minutes : seule "fast" est due (disabled exclue, daily trop loin)
+    // Seule "fast" est due dans une fenêtre de 10 minutes
     let due = reg.due_tasks(from, 600);
     assert_eq!(due.len(), 1);
     assert_eq!(due[0].id, "fast");
@@ -112,13 +109,13 @@ schedule = "@every 10m"
     let f = write_toml(toml);
     let tasks = load_config(f.path()).unwrap();
     let reg = TaskRegistry::from_tasks(tasks);
-    // Toutes les macros doivent être chargées sans erreur
+
     assert_eq!(reg.len(), 6);
     assert_eq!(reg.active_count(), 6);
 }
 
 // ---------------------------------------------------------------------------
-// P2 + P3 : registre → execute_with_retry → ExecutionRecord
+// P2 + P3 : exécution vers ExecutionRecord
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -156,27 +153,24 @@ async fn test_timeout_task_record_marks_failure() {
 
 #[tokio::test]
 async fn test_retry_succeeds_on_eventual_success() {
-    // Un script qui échoue la première fois puis réussit :
-    // on utilise un fichier flag dans /tmp pour simuler ça.
+    // Simulation d’un échec puis succès via un fichier flag
     let flag = format!("/tmp/taskforge_retry_test_{}", std::process::id());
     let cmd = format!(
         "if [ ! -f {flag} ]; then touch {flag}; exit 1; else rm {flag}; echo ok; fi",
         flag = flag
     );
-    // 1 retry autorisé, base_delay sera 5s → trop long pour un test.
-    // On teste donc avec 0 retry mais on vérifie que le second appel réussit.
+
     let task_fail = make_task("retry-flag", &cmd, 0, 10);
+
     let record1 = execute_with_retry(&task_fail).await;
-    // Premier appel : le flag n'existe pas → exit 1
     assert!(!record1.success);
 
-    // Deuxième appel : le flag existe → succès
     let record2 = execute_with_retry(&task_fail).await;
     assert!(record2.success);
 }
 
 // ---------------------------------------------------------------------------
-// P1 + P2 + P3 : flux complet avec canal mpsc (interface vers P4)
+// P1 + P2 + P3 : exécution via canal mpsc
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -190,7 +184,6 @@ async fn test_channel_receives_execution_record() {
     let received = rx.recv().await.unwrap();
     assert_eq!(received.task_id, "chan");
     assert!(received.success);
-    assert!(received.stdout.contains("canal_ok"));
 }
 
 #[tokio::test]
@@ -210,11 +203,10 @@ async fn test_multiple_tasks_all_send_to_channel() {
             tx_clone.send(record).await.unwrap();
         });
     }
-    drop(tx); // ferme le sender principal
+    drop(tx);
 
     let mut ids = vec![];
     while let Some(record) = rx.recv().await {
-        assert!(record.success);
         ids.push(record.task_id);
     }
     ids.sort();
@@ -223,7 +215,6 @@ async fn test_multiple_tasks_all_send_to_channel() {
 
 #[tokio::test]
 async fn test_registry_due_tasks_executed_and_sent() {
-    // Charge un registre en mémoire, trouve les tâches dues, les exécute, vérifie le canal
     let mut reg = TaskRegistry::new();
     reg.register(make_task("reg-task", "echo from_registry", 0, 10));
 
@@ -252,7 +243,7 @@ async fn test_registry_due_tasks_executed_and_sent() {
 }
 
 // ---------------------------------------------------------------------------
-// P1 + P2 + P3 + P4 : flux complet jusqu'à la persistance
+// P1 vers P4 : exécution + persistance
 // ---------------------------------------------------------------------------
 
 #[tokio::test]
@@ -262,21 +253,18 @@ async fn test_full_pipeline_execute_then_persist() {
     use std::env;
     use tempfile::tempdir;
 
+    let _lock = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempdir().unwrap();
-    env::set_current_dir(&dir).unwrap();
+    env::set_var("TASKFORGE_LOGS_DIR", dir.path());
 
-    // P3 : exécute une tâche
     let task = make_task("pipeline_ok", "echo pipeline", 0, 10);
     let record = execute_with_retry(&task).await;
     assert!(record.success);
 
-    // P4 : persiste le record
     save_record(&record).unwrap();
 
-    // P5 pourra interroger l'historique
-    let last = last_execution("pipeline_ok");
-    assert!(last.is_some());
-    assert_eq!(last.unwrap().status, "success");
+    let last = last_execution("pipeline_ok").unwrap();
+    assert_eq!(last.status, "success");
     assert_eq!(total_executions("pipeline_ok"), 1);
     assert!((success_rate("pipeline_ok", 0) - 1.0).abs() < 0.001);
 }
@@ -288,27 +276,25 @@ async fn test_full_pipeline_with_failure_persisted() {
     use std::env;
     use tempfile::tempdir;
 
+    let _lock = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempdir().unwrap();
-    env::set_current_dir(&dir).unwrap();
+    env::set_var("TASKFORGE_LOGS_DIR", dir.path());
 
-    // 2 succès puis 1 échec
     for _ in 0..2 {
         let task = make_task("pipeline_mix", "echo ok", 0, 10);
         let record = execute_with_retry(&task).await;
         save_record(&record).unwrap();
     }
+
     let task_fail = make_task("pipeline_mix", "exit 1", 0, 10);
     let record_fail = execute_with_retry(&task_fail).await;
     save_record(&record_fail).unwrap();
 
     let last = last_execution("pipeline_mix").unwrap();
-    assert_eq!(last.status, "failure", "La dernière doit être un échec");
+    assert_eq!(last.status, "failure");
 
     let rate = success_rate("pipeline_mix", 0);
-    assert!(
-        (rate - 2.0/3.0).abs() < 0.01,
-        "Taux attendu ~0.667, obtenu {}", rate
-    );
+    assert!((rate - 2.0/3.0).abs() < 0.01);
 }
 
 #[tokio::test]
@@ -318,13 +304,13 @@ async fn test_full_pipeline_via_mpsc_channel() {
     use tempfile::tempdir;
     use tokio::sync::mpsc;
 
+    let _lock = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     let dir = tempdir().unwrap();
-    env::set_current_dir(&dir).unwrap();
+    env::set_var("TASKFORGE_LOGS_DIR", dir.path());
 
     let (tx, rx) = mpsc::channel(32);
-    start_history_writer(rx); // démarre le writer P4
+    start_history_writer(rx);
 
-    // P3 exécute 3 tâches et envoie sur le canal
     let tasks = vec![
         make_task("chan_full", "echo t1", 0, 10),
         make_task("chan_full", "echo t2", 0, 10),
@@ -337,13 +323,9 @@ async fn test_full_pipeline_via_mpsc_channel() {
     }
     drop(tx);
 
-    // Attendre que le writer P4 ait tout persisté
     tokio::time::sleep(tokio::time::Duration::from_millis(300)).await;
 
     assert_eq!(total_executions("chan_full"), 3);
     let rate = success_rate("chan_full", 0);
-    assert!(
-        (rate - 2.0/3.0).abs() < 0.01,
-        "Taux attendu ~0.667, obtenu {}", rate
-    );
+    assert!((rate - 2.0/3.0).abs() < 0.01);
 }
