@@ -1,7 +1,7 @@
 use taskforge::history::{last_execution, success_rate, list_known_tasks, total_executions};
 use taskforge::history::store::save_record;
 use taskforge::types::ExecutionRecord;
-use chrono::{Utc, TimeZone};
+use chrono::{Utc};
 use std::env;
 use std::sync::Mutex;
 use tempfile::tempdir;

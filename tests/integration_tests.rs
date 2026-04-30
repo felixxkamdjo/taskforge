@@ -1,9 +1,9 @@
 use taskforge::registry::{load_config, TaskRegistry};
 use taskforge::engine::execute_with_retry;
-use taskforge::types::{Schedule, Task, CronField};
+use taskforge::types::{Schedule, Task};
 use chrono::{Utc, TimeZone};
 use std::io::Write;
-use std::sync::{Arc, Mutex};
+use std::sync::{Mutex};
 use tokio::sync::mpsc;
 use tempfile::NamedTempFile;
 
@@ -363,13 +363,13 @@ mod cli {
         Status,
     }
 
-    pub mod health {
-        use taskforge::registry::TaskRegistry;
+    // pub mod health {
+    //     use taskforge::registry::TaskRegistry;
 
-        pub fn print_health_report(_registry: &TaskRegistry) {
-            // Stubbed health report for integration tests.
-        }
-    }
+    //     // pub fn print_health_report(_registry: &TaskRegistry) {
+    //     //     // Stubbed health report for integration tests.
+    //     // }
+    // }
 }
 
 #[test]

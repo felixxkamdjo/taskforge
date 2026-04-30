@@ -1,6 +1,6 @@
 use crate::registry::TaskRegistry;
 use crate::history::query::{last_execution, success_rate};
-use chrono::Utc;
+// use chrono::Utc;
 
 pub fn print_health_report(registry: &TaskRegistry) {
     println!("=== RAPPORT DE SANTÉ TASKFORGE ===");
