@@ -90,7 +90,24 @@ mod tests {
     use super::*;
     use chrono::Utc;
     use std::env;
+    use std::fs;
     use tempfile::tempdir;
+
+    // Import du lock global défini dans history/mod.rs.
+    // Tous les tests du module history (store ET query) partagent ce même
+    // Mutex pour sérialiser les appels à set_current_dir() qui est global
+    // au processus — deux Mutex distincts ne s'excluent pas mutuellement.
+    use crate::history::TEST_LOCK;
+
+    struct DirGuard { original: std::path::PathBuf }
+    impl Drop for DirGuard {
+        fn drop(&mut self) { let _ = env::set_current_dir(&self.original); }
+    }
+    fn enter_dir(dir: &tempfile::TempDir) -> DirGuard {
+        let original = env::current_dir().unwrap_or_else(|_| std::path::PathBuf::from("/tmp"));
+        env::set_current_dir(dir).unwrap();
+        DirGuard { original }
+    }
 
     /// Crée un ExecutionRecord de test avec les paramètres donnés
     fn make_record(task_id: &str, success: bool, exit_code: Option<i32>) -> ExecutionRecord {
@@ -117,6 +134,7 @@ mod tests {
 
     #[test]
     fn test_log_path_format_mensuel() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let record = make_record("backup_db", true, Some(0));
         let path = log_path(&record);
         let name = path.file_name().unwrap().to_str().unwrap();
@@ -128,6 +146,7 @@ mod tests {
 
     #[test]
     fn test_csv_line_succes() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let record = make_record("ping", true, Some(0));
         let line = to_csv_line(&record);
 
@@ -139,6 +158,7 @@ mod tests {
 
     #[test]
     fn test_csv_line_echec_avec_stderr() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let record = make_record("backup", false, Some(1));
         let line = to_csv_line(&record);
 
@@ -156,6 +176,7 @@ mod tests {
 
     #[test]
     fn test_csv_line_timeout_end_time_none() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut record = make_record("slow_task", false, None);
         record.end_time = None; // simuler un timeout
 
@@ -171,8 +192,9 @@ mod tests {
     #[test]
     fn test_save_record_cree_le_fichier() {
         // Vérifie que save_record crée bien le fichier de log
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        env::set_current_dir(&dir).unwrap();
+        let _guard = enter_dir(&dir);
 
         let record = make_record("test_task", true, Some(0));
         save_record(&record).expect("save_record ne doit pas échouer");
@@ -190,13 +212,15 @@ mod tests {
 
     #[test]
     fn test_save_record_append_multiple() {
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        env::set_current_dir(&dir).unwrap();
+        let _guard = enter_dir(&dir);
 
         for i in 0..5 {
             let mut record = make_record("task_multi", i % 2 == 0, Some(i as i32 % 2));
-
+            // Mettre à jour start_time ET end_time ensemble pour rester dans le même mois
             record.start_time = record.start_time + chrono::Duration::seconds(i as i64);
+            record.end_time = Some(record.start_time + chrono::Duration::milliseconds(800));
             save_record(&record).expect("Échec save_record");
         }
 
@@ -215,8 +239,9 @@ mod tests {
     #[test]
     fn test_rotation_mensuelle_fichiers_distincts() {
         // Vérifie que deux mois différents → deux fichiers distincts
+        let _lock = TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let dir = tempdir().unwrap();
-        env::set_current_dir(&dir).unwrap();
+        let _guard = enter_dir(&dir);
 
         // Mois 1 : avril 2026
         let mut r1 = make_record("backup", true, Some(0));
