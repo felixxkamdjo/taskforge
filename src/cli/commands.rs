@@ -133,4 +133,36 @@ mod tests {
             _ => panic!("La commande parsée n'est pas 'enable'"),
         }
     }
+
+    #[test]
+    fn test_parse_disable() {
+        let args = vec!["taskforge", "disable", "nightly_backup"];
+        let cli = Cli::parse_from(args);
+        match cli.command {
+            Commands::Disable { name } => assert_eq!(name, "nightly_backup"),
+            _ => panic!("attendu 'disable'"),
+        }
+    }
+
+    #[test]
+    fn test_parse_status() {
+        let args = vec!["taskforge", "status"];
+        let cli = Cli::parse_from(args);
+        assert!(matches!(cli.command, Commands::Status));
+    }
+
+    #[test]
+    fn test_parse_custom_config_path() {
+        let args = vec!["taskforge", "--config", "/etc/taskforge/prod.toml", "list"];
+        let cli = Cli::parse_from(args);
+        assert_eq!(cli.config, "/etc/taskforge/prod.toml");
+        assert!(matches!(cli.command, Commands::List));
+    }
+
+    #[test]
+    fn test_default_config_path() {
+        let args = vec!["taskforge", "list"];
+        let cli = Cli::parse_from(args);
+        assert_eq!(cli.config, "config/tasks.toml");
+    }
 }
